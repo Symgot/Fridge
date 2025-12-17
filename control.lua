@@ -48,10 +48,12 @@ end
 -- @field storage.Fridges Table storing all fridge entities
 -- @field storage.Warehouses Table storing all warehouse entities
 -- @field storage.PlatformWarehouses Table storing all platform warehouse entities
+-- @field storage.PlatformHubs Table storing cached space-platform-hub entities by surface
 local function init_storages()
   storage.Fridges = storage.Fridges or {}
   storage.Warehouses = storage.Warehouses or {}
   storage.PlatformWarehouses = storage.PlatformWarehouses or {}
+  storage.PlatformHubs = storage.PlatformHubs or {}
   storage.Wagons = storage.Wagons or {}
   storage.PreservationInserters = storage.PreservationInserters or {}
 end
@@ -122,7 +124,7 @@ end
 
 
 --- Process space platform warehouses to extend item spoilage time
--- Only runs if Space Age mod is active. Finds all platform hubs and extends
+-- Only runs if Space Age mod is active. Uses cached platform hubs and extends
 -- spoilage time for items up to the configured bonus slot capacity.
 -- Tracks which slots are being preserved for visual feedback.
 --
@@ -133,42 +135,50 @@ local function check_platform_warehouse()
     
     -- Process each surface with platform warehouses
     for surface_name, warehouses in pairs(storage.PlatformWarehouses) do
-        local surface = game.surfaces[surface_name]
-        if not surface then goto continue end
+        -- Skip if no warehouses on this surface
+        if not warehouses or #warehouses == 0 then goto continue end
         
         -- Calculate preservation capacity for this surface
         local bonus_slots = #warehouses * settings.startup["fridge-space-plantform-capacity"].value
         
-        -- Find and process all platform hubs
-        local platform_hubs = surface.find_entities_filtered{
-            name = "space-platform-hub"
-        }
+        -- Get cached platform hubs for this surface
+        local platform_hubs = storage.PlatformHubs[surface_name] or {}
         
-        -- Process each hub's inventory
+        -- Clean up invalid hubs and process valid ones
+        local valid_hubs = {}
         for _, hub in pairs(platform_hubs) do
-            local platform_inv = hub.get_inventory(defines.inventory.hub_main)
-            if not platform_inv then goto next_hub end
-            
-            -- Track preserved slots for this hub
-            local items_frozen = 0
-            
-            -- Process inventory slots up to capacity
-            for i = 1, #platform_inv do
-                -- Stop if we've reached preservation limit
-                if items_frozen >= bonus_slots then break end
+            if hub and hub.valid then
+                table.insert(valid_hubs, hub)
                 
-                local itemStack = platform_inv[i]
-                if itemStack and itemStack.valid_for_read and itemStack.spoil_tick > 0 then
-                    local max_spoil_time = game.tick + itemStack.prototype.get_spoil_ticks(itemStack.quality) - 3
-                    itemStack.spoil_tick = math.min(
-                        itemStack.spoil_tick + 80,
-                        max_spoil_time
-                    )
-                    items_frozen = items_frozen + 1
+                local platform_inv = hub.get_inventory(defines.inventory.hub_main)
+                if platform_inv then
+                    -- Track preserved slots for this hub
+                    local items_frozen = 0
+                    
+                    -- Process inventory slots up to capacity
+                    for i = 1, #platform_inv do
+                        -- Stop if we've reached preservation limit
+                        if items_frozen >= bonus_slots then break end
+                        
+                        local itemStack = platform_inv[i]
+                        if itemStack and itemStack.valid_for_read and itemStack.spoil_tick > 0 then
+                            local max_spoil_time = game.tick + itemStack.prototype.get_spoil_ticks(itemStack.quality) - 3
+                            itemStack.spoil_tick = math.min(
+                                itemStack.spoil_tick + 80,
+                                max_spoil_time
+                            )
+                            items_frozen = items_frozen + 1
+                        end
+                    end
                 end
             end
-            
-            ::next_hub::
+        end
+        
+        -- Update cache with only valid hubs
+        if #valid_hubs > 0 then
+            storage.PlatformHubs[surface_name] = valid_hubs
+        else
+            storage.PlatformHubs[surface_name] = nil
         end
         
         ::continue::
@@ -290,6 +300,12 @@ local function OnEntityCreated(event)
         -- Add warehouse to surface storage
         table.insert(storage.PlatformWarehouses[surface_name], entity)
         
+    elseif entity.name == "space-platform-hub" then
+        -- Cache platform hub for efficient access
+        local surface_name = entity.surface.name
+        storage.PlatformHubs[surface_name] = storage.PlatformHubs[surface_name] or {}
+        table.insert(storage.PlatformHubs[surface_name], entity)
+        
     elseif entity.name:find("refrigerater") then
         -- Register basic or logistic refrigerator
         storage.Fridges[entity.unit_number] = entity
@@ -346,6 +362,26 @@ local function OnEntityRemoved(event)
                     break
                 end
             end
+            -- Clean up empty surface entry to prevent memory leak
+            if #storage.PlatformWarehouses[surface_name] == 0 then
+                storage.PlatformWarehouses[surface_name] = nil
+            end
+        end
+        
+    elseif entity.name == "space-platform-hub" then
+        -- Remove from cached hubs
+        local surface_name = entity.surface.name
+        if storage.PlatformHubs[surface_name] then
+            for i, hub in ipairs(storage.PlatformHubs[surface_name]) do
+                if hub == entity then
+                    table.remove(storage.PlatformHubs[surface_name], i)
+                    break
+                end
+            end
+            -- Clean up empty surface entry to prevent memory leak
+            if #storage.PlatformHubs[surface_name] == 0 then
+                storage.PlatformHubs[surface_name] = nil
+            end
         end
         
     elseif entity.name:find("refrigerater") then
@@ -383,6 +419,7 @@ local function init_entities()
     storage.Fridges = {}
     storage.Warehouses = {}
     storage.PlatformWarehouses = {}
+    storage.PlatformHubs = {}
     storage.Wagons = {}
     storage.PreservationInserters = {}
 
@@ -454,6 +491,14 @@ local function init_entities()
           if #platform_warehouses > 0 then
               storage.PlatformWarehouses[surface.name] = platform_warehouses
           end
+          
+          -- Find and cache platform hubs for efficient access
+          local platform_hubs = surface.find_entities_filtered{
+              name = "space-platform-hub"
+          }
+          if #platform_hubs > 0 then
+              storage.PlatformHubs[surface.name] = platform_hubs
+          end
         end
         
         -- Find and register preservation wagons
@@ -491,6 +536,7 @@ local function init_events()
     if script.active_mods["space-age"] then
       table.insert(entity_filter, { filter = "name", name = "preservation-platform-warehouse" })
       table.insert(entity_filter, { filter = "name", name = "preservation-bulk-inserter" })
+      table.insert(entity_filter, { filter = "name", name = "space-platform-hub" })
     end
     
     -- Register entity creation events

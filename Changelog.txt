@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.2
+  Categories:
+    - Performance Optimization, Bug Fixes
+  Date: 2025-1-17:
+  Changes:
+    - Performance Optimization:
+      - Implement caching for space-platform-hub entities to prevent expensive entity searches every 1.5 seconds
+      - Dramatically improved performance on large surfaces (like Nauvis) with many entities
+    - Bug Fixes:
+      - Fix memory leak where empty surface entries weren't cleaned up after removing all platform warehouses
+      - Added migration script to populate hub cache for existing saves
+---------------------------------------------------------------------------------------------------
 Version: 0.2.1
   Categories:
     - Bug Fixes, Modifications
