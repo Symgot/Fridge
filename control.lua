@@ -144,34 +144,41 @@ local function check_platform_warehouse()
         -- Get cached platform hubs for this surface
         local platform_hubs = storage.PlatformHubs[surface_name] or {}
         
-        -- Process each hub's inventory
+        -- Clean up invalid hubs and process valid ones
+        local valid_hubs = {}
         for _, hub in pairs(platform_hubs) do
-            -- Verify hub is still valid
-            if not (hub and hub.valid) then goto next_hub end
-            
-            local platform_inv = hub.get_inventory(defines.inventory.hub_main)
-            if not platform_inv then goto next_hub end
-            
-            -- Track preserved slots for this hub
-            local items_frozen = 0
-            
-            -- Process inventory slots up to capacity
-            for i = 1, #platform_inv do
-                -- Stop if we've reached preservation limit
-                if items_frozen >= bonus_slots then break end
+            if hub and hub.valid then
+                table.insert(valid_hubs, hub)
                 
-                local itemStack = platform_inv[i]
-                if itemStack and itemStack.valid_for_read and itemStack.spoil_tick > 0 then
-                    local max_spoil_time = game.tick + itemStack.prototype.get_spoil_ticks(itemStack.quality) - 3
-                    itemStack.spoil_tick = math.min(
-                        itemStack.spoil_tick + 80,
-                        max_spoil_time
-                    )
-                    items_frozen = items_frozen + 1
+                local platform_inv = hub.get_inventory(defines.inventory.hub_main)
+                if platform_inv then
+                    -- Track preserved slots for this hub
+                    local items_frozen = 0
+                    
+                    -- Process inventory slots up to capacity
+                    for i = 1, #platform_inv do
+                        -- Stop if we've reached preservation limit
+                        if items_frozen >= bonus_slots then break end
+                        
+                        local itemStack = platform_inv[i]
+                        if itemStack and itemStack.valid_for_read and itemStack.spoil_tick > 0 then
+                            local max_spoil_time = game.tick + itemStack.prototype.get_spoil_ticks(itemStack.quality) - 3
+                            itemStack.spoil_tick = math.min(
+                                itemStack.spoil_tick + 80,
+                                max_spoil_time
+                            )
+                            items_frozen = items_frozen + 1
+                        end
+                    end
                 end
             end
-            
-            ::next_hub::
+        end
+        
+        -- Update cache with only valid hubs
+        if #valid_hubs > 0 then
+            storage.PlatformHubs[surface_name] = valid_hubs
+        else
+            storage.PlatformHubs[surface_name] = nil
         end
         
         ::continue::

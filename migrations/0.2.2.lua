@@ -17,9 +17,20 @@ for _, surface in pairs(game.surfaces) do
     end
 end
 
--- Clean up empty surface entries in PlatformWarehouses to fix memory leak
+-- Clean up empty or invalid surface entries in PlatformWarehouses to fix memory leak
 for surface_name, warehouses in pairs(storage.PlatformWarehouses or {}) do
-    if #warehouses == 0 then
+    -- Validate and filter out invalid warehouse entities
+    local valid_warehouses = {}
+    for _, warehouse in ipairs(warehouses) do
+        if warehouse and warehouse.valid then
+            table.insert(valid_warehouses, warehouse)
+        end
+    end
+    
+    -- Update or remove the surface entry
+    if #valid_warehouses > 0 then
+        storage.PlatformWarehouses[surface_name] = valid_warehouses
+    else
         storage.PlatformWarehouses[surface_name] = nil
     end
 end
